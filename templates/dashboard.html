@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fraud Detection Dashboard</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom styles for scrollbars and specific overrides if needed, minimal as possible */
+        .data-section div {
+            scrollbar-width: thin;
+            scrollbar-color: #9CA3AF #F3F4F6; /* thumb and track color */
+        }
+        .data-section div::-webkit-scrollbar {
+            width: 8px;
+        }
+        .data-section div::-webkit-scrollbar-track {
+            background: #F3F4F6;
+            border-radius: 10px;
+        }
+        .data-section div::-webkit-scrollbar-thumb {
+            background-color: #9CA3AF;
+            border-radius: 10px;
+            border: 2px solid #F3F4F6;
+        }
+        /* Ensure table cells don't have too much padding for smaller screens */
+        @media (max-width: 768px) {
+            th, td {
+                padding: 6px 4px;
+                font-size: 0.8em;
+            }
+        }
+    </style>
+</head>
+<body class="bg-blue-50 text-gray-800 font-sans p-4 sm:p-6 md:p-8">
+    <div class="container mx-auto bg-white p-6 sm:p-8 md:p-10 rounded-xl shadow-lg">
+        <!-- HCB Logo - updated to use Flask's url_for for static files -->
+        <img src="{{ url_for('static', filename='hcb-blue-light.png') }}" alt="HCB Logo" 
+             class="block mx-auto sm:mx-0 w-32 sm:w-40 md:w-48 h-auto mb-6 rounded-lg" 
+             onerror="this.onerror=null;this.src='https://placehold.co/200x50/BFDBFE/1F2937?text=HCB+Logo';">
+        
+        <h1 id="dashboard-title" class="text-3xl sm:text-4xl font-extrabold text-blue-700 text-center mb-8">
+            Fraud Detection Dashboard (Synthetic Data)
+        </h1>
+        <div id="loading" class="text-center py-8 text-lg font-semibold text-blue-600">Loading dashboard data...</div>
+        <div id="error-display" class="text-red-600 font-bold text-center py-4 hidden"></div>
+
+        <div class="org-filter mb-8 text-center">
+            <input type="text" id="org-name-input" placeholder="Enter Organization Name (e.g., scrapbook)"
+                   class="p-2 border border-gray-300 rounded-md mr-2 w-full sm:w-64 focus:ring-2 focus:ring-blue-400 focus:border-transparent">
+            <button id="load-org-data-btn"
+                    class="mt-2 sm:mt-0 px-4 py-2 bg-blue-600 text-white rounded-md shadow-md hover:bg-blue-700 transition-colors duration-200 ease-in-out">
+                Load Organization Data
+            </button>
+            <div id="current-org-display" class="font-semibold text-blue-700 mt-4 text-center text-lg">
+                Currently showing: Global (Synthetic)
+            </div>
+        </div>
+
+        <div id="dashboard-content" class="hidden">
+            <div class="summary-cards flex flex-wrap justify-center gap-4 mb-8">
+                <div class="card bg-blue-100 p-4 rounded-lg shadow-md flex-1 min-w-[200px] text-center">
+                    <h3 class="text-lg font-semibold text-blue-800 mb-2">Total Transactions</h3>
+                    <p id="total-transactions" class="text-3xl font-bold text-blue-600">-</p>
+                </div>
+                <div class="card bg-blue-100 p-4 rounded-lg shadow-md flex-1 min-w-[200px] text-center">
+                    <h3 class="text-lg font-semibold text-blue-800 mb-2">Total Fraud</h3>
+                    <p id="total-fraud" class="text-3xl font-bold text-blue-600">-</p>
+                </div>
+                <div class="card bg-blue-100 p-4 rounded-lg shadow-md flex-1 min-w-[200px] text-center">
+                    <h3 class="text-lg font-semibold text-blue-800 mb-2">Fraud Rate</h3>
+                    <p id="fraud-rate" class="text-3xl font-bold text-blue-600">-</p>
+                </div>
+            </div>
+
+            <div class="data-section bg-gray-50 p-6 rounded-lg shadow-sm mb-8">
+                <h2 class="text-2xl font-bold text-blue-700 mb-4 text-center">Daily Transaction Volume</h2>
+                <div class="overflow-x-auto max-h-80">
+                    <table class="w-full border-collapse">
+                        <thead>
+                            <tr>
+                                <th class="px-4 py-2 bg-blue-500 text-white text-left rounded-tl-md">Date</th>
+                                <th class="px-4 py-2 bg-blue-500 text-white text-left rounded-tr-md">Amount ($)</th>
+                            </tr>
+                        </thead>
+                        <tbody id="daily-volume-table">
+                            <!-- Daily volume data will be inserted here -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="data-section bg-gray-50 p-6 rounded-lg shadow-sm mb-8">
+                <h2 class="text-2xl font-bold text-blue-700 mb-4 text-center">Fraud by Transaction Type</h2>
+                <div class="overflow-x-auto max-h-60">
+                    <table class="w-full border-collapse">
+                        <thead>
+                            <tr>
+                                <th class="px-4 py-2 bg-blue-500 text-white text-left rounded-tl-md">Transaction Type</th>
+                                <th class="px-4 py-2 bg-blue-500 text-white text-left rounded-tr-md">Fraud Count</th>
+                            </tr>
+                        </thead>
+                        <tbody id="fraud-by-type-table">
+                            <!-- Fraud by type data will be inserted here -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="data-section bg-gray-50 p-6 rounded-lg shadow-sm mb-8">
+                <h2 class="text-2xl font-bold text-blue-700 mb-4 text-center">Latest Transactions</h2>
+                <div class="overflow-x-auto max-h-96">
+                    <table class="w-full border-collapse">
+                        <thead>
+                            <tr>
+                                <th class="px-4 py-2 bg-blue-500 text-white text-left rounded-tl-md">ID</th>
+                                <th class="px-4 py-2 bg-blue-500 text-white text-left">Amount ($)</th>
+                                <th class="px-4 py-2 bg-blue-500 text-white text-left">Date</th>
+                                <th class="px-4 py-2 bg-blue-500 text-white text-left">User ID</th>
+                                <th class="px-4 py-2 bg-blue-500 text-white text-left">Org ID</th>
+                                <th class="px-4 py-2 bg-blue-500 text-white text-left">Type</th>
+                                <th class="px-4 py-2 bg-blue-500 text-white text-left">Is Fraud</th>
+                                <th class="px-4 py-2 bg-blue-500 text-white text-left rounded-tr-md">Fraud Prob.</th>
+                            </tr>
+                        </thead>
+                        <tbody id="latest-transactions-table">
+                            <!-- Latest transactions data will be inserted here -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            
+            <!-- You can add more sections for ML predictions later if needed -->
+        </div>
+
+        <!-- Disclaimer added here -->
+        <div class="disclaimer text-center text-gray-600 text-sm mt-8 pt-4 border-t border-gray-200">
+            This dashboard is not affiliated with Hack Club.
+        </div>
+    </div>
+
+    <script>
+        // Function to update the dashboard with data
+        function updateDashboard(data) {
+            const dashboardTitle = document.getElementById('dashboard-title');
+            const currentOrgDisplay = document.getElementById('current-org-display');
+
+            // Update dashboard title based on context
+            if (data.organization_context) {
+                dashboardTitle.textContent = `Fraud Detection Dashboard for ${data.organization_context}`;
+                currentOrgDisplay.textContent = `Currently showing: ${data.organization_context}`;
+            } else {
+                dashboardTitle.textContent = `Fraud Detection Dashboard (Global View)`;
+                currentOrgDisplay.textContent = `Currently showing: Global (Synthetic)`;
+            }
+
+            // Update Summary Cards
+            if (data.summary && typeof data.summary === 'object') { 
+                document.getElementById('total-transactions').textContent = (data.summary.total_transactions !== undefined && data.summary.total_transactions !== null ? data.summary.total_transactions : 0).toLocaleString();
+                document.getElementById('total-fraud').textContent = (data.summary.total_fraud !== undefined && data.summary.total_fraud !== null ? data.summary.total_fraud : 0).toLocaleString();
+                document.getElementById('fraud-rate').textContent = `${(data.summary.fraud_rate !== undefined && data.summary.fraud_rate !== null ? data.summary.fraud_rate : 0).toFixed(2)}%`;
+            } else {
+                console.warn('Summary data is missing or not an object.');
+                document.getElementById('total-transactions').textContent = 'N/A';
+                document.getElementById('total-fraud').textContent = 'N/A';
+                document.getElementById('fraud-rate').textContent = 'N/A';
+            }
+
+            // Populate Daily Volume Table
+            const dailyVolumeTable = document.getElementById('daily-volume-table');
+            dailyVolumeTable.innerHTML = ''; // Clear previous content
+            if (Array.isArray(data.daily_volume)) {
+                data.daily_volume.forEach(item => {
+                    const row = dailyVolumeTable.insertRow();
+                    row.classList.add('border-b', 'border-gray-200'); /* Add Tailwind classes for row styling */
+                    row.insertCell().textContent = item.date || 'N/A';
+                    row.insertCell().textContent = `$${(item.amount || 0).toFixed(2)}`;
+                });
+            } else {
+                console.warn('Daily volume data is missing or not an array.');
+            }
+
+            // Populate Fraud by Type Table
+            const fraudByTypeTable = document.getElementById('fraud-by-type-table');
+            fraudByTypeTable.innerHTML = ''; // Clear previous content
+            if (Array.isArray(data.fraud_by_type)) {
+                data.fraud_by_type.forEach(item => {
+                    const row = fraudByTypeTable.insertRow(); 
+                    row.classList.add('border-b', 'border-gray-200'); /* Add Tailwind classes for row styling */
+                    row.insertCell().textContent = item['transaction.type'] || item.transaction_type || 'N/A'; 
+                    row.insertCell().textContent = (item.is_fraud || 0).toLocaleString();
+                });
+            } else {
+                console.warn('Fraud by type data is missing or not an array.');
+            }
+
+            // Populate Latest Transactions Table
+            const latestTransactionsTable = document.getElementById('latest-transactions-table');
+            latestTransactionsTable.innerHTML = ''; // Clear previous content
+            if (Array.isArray(data.latest_transactions)) {
+                data.latest_transactions.forEach(txn => {
+                    const row = latestTransactionsTable.insertRow();
+                    row.classList.add('border-b', 'border-gray-200'); /* Add Tailwind classes for row styling */
+                    row.insertCell().textContent = txn.transaction_id || 'N/A';
+                    row.insertCell().textContent = `$${(txn.amount || 0).toFixed(2)}`;
+                    row.insertCell().textContent = txn.date ? new Date(txn.date).toLocaleDateString() : 'N/A'; // Format date
+                    row.insertCell().textContent = txn['user.id'] || 'N/A';
+                    row.insertCell().textContent = txn['organization.id'] || 'N/A';
+                    row.insertCell().textContent = txn['transaction.type'] || 'N/A';
+                    row.insertCell().textContent = txn.is_fraud === 1 ? 'Yes' : (txn.is_fraud === 0 ? 'No' : 'N/A');
+                    row.insertCell().textContent = txn.fraud_probability !== undefined ? `${(txn.fraud_probability * 100).toFixed(2)}%` : 'N/A';
+                });
+            } else {
+                console.warn('Latest transactions data is missing or not an array.');
+            }
+        }
+
+        // Function to fetch data from a given URL
+        function fetchData(url) {
+            const loadingDiv = document.getElementById('loading');
+            const errorDiv = document.getElementById('error-display');
+            const dashboardContentDiv = document.getElementById('dashboard-content');
+
+            loadingDiv.classList.remove('hidden'); /* Show loading */
+            errorDiv.classList.add('hidden');    /* Hide error */
+            dashboardContentDiv.classList.add('hidden'); /* Hide content */
+
+            console.log(`Attempting to fetch dashboard data from: ${url}`);
+
+            fetch(url)
+                .then(response => {
+                    console.log('Fetch response received. Status:', response.status);
+                    if (!response.ok) {
+                        return response.json().then(err => { 
+                            console.error('Server responded with an error:', err);
+                            throw new Error(err.message || err.error || 'Server error'); 
+                        });
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    console.log('Data received from API:', data);
+                    loadingDiv.classList.add('hidden');    /* Hide loading */
+                    dashboardContentDiv.classList.remove('hidden'); /* Show content */
+                    updateDashboard(data); // Call the new function to update the UI
+                    console.log("Dashboard data loaded successfully and processed.");
+                })
+                .catch(error => {
+                    console.error('Error fetching or processing dashboard data:', error);
+                    loadingDiv.classList.add('hidden');    /* Hide loading */
+                    errorDiv.textContent = `Failed to load dashboard data: ${error.message || error}. Please check browser console for details.`;
+                    errorDiv.classList.remove('hidden'); /* Show error */
+                });
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            // Initial load of global (synthetic) data
+            fetchData('/api/dashboard/hq');
+
+            // Event listener for the "Load Organization Data" button
+            const loadOrgDataBtn = document.getElementById('load-org-data-btn');
+            const orgNameInput = document.getElementById('org-name-input');
+
+            loadOrgDataBtn.addEventListener('click', function() {
+                const organizationName = orgNameInput.value.trim();
+                if (organizationName) {
+                    fetchData(`/api/dashboard/${organizationName.toLowerCase()}`);
+                } else {
+                    alert('Please enter an organization name.');
+                }
+            });
+        });
+    </script>
+</body>
+</html>
