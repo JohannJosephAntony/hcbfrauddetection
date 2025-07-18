@@ -22,8 +22,7 @@ HCB_API_BASE_URL = "https://hcb.hackclub.com/api/v3"
 # IMPORTANT: Get your HCB API key if you need to access non-public data.
 # It's HIGHLY recommended to store this in an environment variable.
 # For example, in a .env file: HCB_API_KEY="sk_live_..."
-HCB_API_KEY = os.getenv("HCB_API_KEY")
-# No default here, rely on .env or actual env var
+HCB_API_KEY = os.getenv("HCB_API_KEY") # No default here, rely on .env or actual env var
 
 # --- Data Fetching from HCB API ---
 def fetch_hcb_transactions(organization_id=None, limit=50000):
@@ -41,17 +40,18 @@ def fetch_hcb_transactions(organization_id=None, limit=50000):
     else:
         print("WARNING: HCB_API_KEY environment variable is not set. Access might be limited to public data.")
 
-    # If no organization_id is provided, we cannot fetch global transactions directly
+    # --- IMPORTANT FIX HERE ---
     if organization_id is None:
         print("INFO: Cannot fetch general transactions globally from HCB API directly without an organization ID.")
         print("INFO: Returning empty data for this request. Consider fetching transparent organizations first for a 'global' view.")
         return pd.DataFrame() # Return an empty DataFrame directly
+    # --- END IMPORTANT FIX ---
 
     # If organization_id is provided, proceed to fetch specific organization's transactions
     url = f"{HCB_API_BASE_URL}/organizations/{organization_id}/transactions"
     params = {"per_page": 100} # Fetch 100 items per page
 
-    print(f"INFO: Attempting to fetch real-time transactions for organization ID: {organization_id} from {url}")
+    print(f"INFO: Fetching transactions for organization ID: {organization_id} from {url}")
 
     page = 1
     fetched_count = 0
@@ -64,6 +64,11 @@ def fetch_hcb_transactions(organization_id=None, limit=50000):
             response = requests.get(url, headers=headers, params=current_params, timeout=10)
             response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
             current_page_data = response.json()
+
+            # Defensive: If the response is not a list, it's likely an error (e.g., {"message": ...})
+            if not isinstance(current_page_data, list):
+                print(f"WARNING: HCB API did not return a list for org {organization_id}. Response: {current_page_data}")
+                return pd.DataFrame() # Return empty DataFrame
 
             if not current_page_data:
                 break # No more data
@@ -78,23 +83,27 @@ def fetch_hcb_transactions(organization_id=None, limit=50000):
             print(f"DEBUG: Fetched {fetched_count} transactions so far...")
 
         except requests.exceptions.HTTPError as http_err:
-            print(f"ERROR: HTTP error occurred while fetching HCB transactions for org {organization_id}: {http_err} - Response: {http_err.response.text}")
-            break
+            print(f"ERROR: HTTP error occurred while fetching HCB transactions for org {organization_id}: {http_err} - Response: {getattr(http_err.response, 'text', '')}")
+            return pd.DataFrame() # Return empty DataFrame on HTTP error
         except requests.exceptions.ConnectionError as conn_err:
             print(f"ERROR: Connection error while fetching HCB transactions for org {organization_id}: {conn_err}")
-            break
+            return pd.DataFrame()
         except requests.exceptions.Timeout as timeout_err:
             print(f"ERROR: Timeout error while fetching HCB transactions for org {organization_id}: {timeout_err}")
-            break
+            return pd.DataFrame()
         except requests.exceptions.RequestException as req_err:
             print(f"ERROR: An unexpected request error occurred while fetching HCB transactions for org {organization_id}: {req_err}")
-            break
+            return pd.DataFrame()
         except json.JSONDecodeError as json_err:
             print(f"ERROR: Failed to decode JSON response from HCB API for org {organization_id}: {json_err} - Response text: {response.text}")
-            break
+            return pd.DataFrame()
         except Exception as e:
             print(f"ERROR: An unexpected error occurred in HCB fetch for org {organization_id}: {e}")
-            break
+            return pd.DataFrame()
+
+    if not transactions_data:
+        print(f"WARNING: No transactions data fetched for org {organization_id} from HCB API.")
+        return pd.DataFrame()
 
     # Map HCB API fields to our expected DataFrame columns
     mapped_data = []
@@ -117,6 +126,10 @@ def fetch_hcb_transactions(organization_id=None, limit=50000):
         })
 
     df = pd.DataFrame(mapped_data)
+
+    if df.empty:
+        print(f"WARNING: DataFrame is empty after mapping for org {organization_id}.")
+        return df
 
     # Basic cleaning after mapping
     df['amount'] = pd.to_numeric(df['amount'], errors='coerce').fillna(0)
@@ -212,7 +225,7 @@ def engineer_features(df):
         df_copy[col] = df_copy[col].fillna(0)
 
 
-    df_copy['amount'] = pd.to_numeric(df['amount'], errors='coerce')
+    df_copy['amount'] = pd.to_numeric(df_copy['amount'], errors='coerce')
     
     df_copy['user_avg_amount'] = df_copy.groupby('user.id')['amount'].transform('mean')
     df_copy['user_max_amount'] = df_copy.groupby('user.id')['amount'].transform('max')
@@ -310,16 +323,11 @@ class DataProcessor:
         if '__original_order__' in final_display_df.columns:
             final_display_df.drop(columns=['__original_order__'], inplace=True)
 
-        # Ensure all numerical columns in final_display_df have no NaNs before converting to dicts
-        # This is crucial for valid JSON output.
-        for col in final_display_df.select_dtypes(include=np.number).columns:
-            final_display_df[col] = final_display_df[col].fillna(0)
-
         total_transactions = len(final_display_df)
         total_fraud = final_display_df['is_fraud'].sum() if 'is_fraud' in final_display_df.columns else 0
         fraud_rate = (total_fraud / total_transactions) * 100 if total_transactions > 0 else 0
 
-        # Ensure daily_volume is a list of dicts
+        # --- FIX FOR daily_volume ---
         if 'date' in final_display_df.columns:
             final_display_df['date'] = pd.to_datetime(final_display_df['date'])
             daily_volume_df = final_display_df.groupby(final_display_df['date'].dt.date)['amount'].sum().reset_index()
@@ -329,7 +337,7 @@ class DataProcessor:
             print("WARNING: 'date' column not found in final_display_df. Cannot calculate daily volume.")
             daily_volume = pd.DataFrame(columns=['date', 'amount']).to_dict(orient='records')
 
-        # Ensure fraud_by_type is a list of dicts
+        # --- FIX FOR fraud_by_type ---
         if 'transaction.type' in final_display_df.columns and 'is_fraud' in final_display_df.columns:
             fraud_by_type_df = final_display_df.groupby('transaction.type')['is_fraud'].sum().reset_index()
             fraud_by_type = fraud_by_type_df.to_dict(orient='records') # Convert to list of dicts
@@ -339,10 +347,9 @@ class DataProcessor:
 
 
         if 'date' in final_display_df.columns:
-            # Changed to head(20) to show latest 20 transactions
-            latest_transactions_df = final_display_df.sort_values(by='date', ascending=False).head(20).copy()
+            latest_transactions_df = final_display_df.sort_values(by='date', ascending=False).head(10).copy()
         else:
-            latest_transactions_df = final_display_df.head(20).copy() # Changed to head(20)
+            latest_transactions_df = final_display_df.head(10).copy()
 
 
         ml_predictions_available = False
@@ -375,9 +382,6 @@ class DataProcessor:
                         errors='ignore'
                     )
                     
-                    # Fill any remaining NaN values with 0 before prediction
-                    model_input_df = model_input_df.fillna(0) 
-
                     try:
                         predicted_probas = ml_model.predict_proba(model_input_df)[:, 1]
                         latest_transactions_df['fraud_probability'] = predicted_probas
@@ -387,9 +391,6 @@ class DataProcessor:
 
         latest_transactions = latest_transactions_df.to_dict(orient='records')
         for txn in latest_transactions:
-            # Convert any NaN in fraud_probability to None (which jsonify converts to null)
-            if 'fraud_probability' in txn and np.isnan(txn['fraud_probability']):
-                txn['fraud_probability'] = None
             if 'date' in txn and isinstance(txn['date'], pd.Timestamp):
                 txn['date'] = txn['date'].isoformat()
 
@@ -399,8 +400,8 @@ class DataProcessor:
                 'total_fraud': int(total_fraud),
                 'fraud_rate': round(fraud_rate, 2)
             },
-            'daily_volume': daily_volume,
-            'fraud_by_type': fraud_by_type,
+            'daily_volume': daily_volume, # This is now a list of dicts
+            'fraud_by_type': fraud_by_type, # This is now a list of dicts
             'latest_transactions': latest_transactions,
             'ml_predictions': {
                 'available': ml_predictions_available,
@@ -420,20 +421,35 @@ except Exception as e:
     print(f"Error loading ML model: {e}")
     ml_model = None
 
-# --- Generate ALL data (from HCB API or fallback to synthetic) once at app startup ---
-print("Attempting to fetch all transactions from HCB API at app startup...")
-# This call now returns an empty DataFrame if no org_id is specified
-all_transactions_df = fetch_hcb_transactions(limit=50000)
-print("HCB data fetching for app complete.")
-print(f"DEBUG: Columns in all_transactions_df after fetching: {all_transactions_df.columns.tolist()}")
-print(f"DEBUG: Shape of all_transactions_df after fetching: {all_transactions_df.shape}")
+# --- Fetch all available organizations from HCB API ---
+available_orgs = {}
+print("Fetching available HCB organizations...")
+try:
+    orgs_url = f"{HCB_API_BASE_URL}/organizations"
+    params = {"per_page": 100}
+    response = requests.get(orgs_url, params=params, timeout=10)
+    response.raise_for_status()
+    orgs = response.json()
+    if isinstance(orgs, list):
+        print("\n--- Available HCB Organizations ---")
+        for org in orgs:
+            slug = org.get('slug', '').lower()
+            org_id = org.get('id')
+            name = org.get('name', 'Unknown')
+            if slug and org_id:
+                available_orgs[slug] = org_id
+                print(f"  {slug} (ID: {org_id}) - {name}")
+        print(f"--- Found {len(available_orgs)} organizations ---\n")
+    else:
+        print(f"Unexpected orgs response: {orgs}")
+except Exception as e:
+    print(f"Failed to fetch organizations: {e}")
 
-if all_transactions_df.empty:
-    print("WARNING: No data fetched from HCB API for global view. Dashboard will use synthetic data.")
-    from generate_data import generate_synthetic_data # This import should now resolve!
-    all_transactions_df = generate_synthetic_data(num_samples=10000, fraud_rate=0.0179)
-    print("DEBUG: Using synthetic data as fallback for global view.")
-
+# Use synthetic data for the global dashboard
+print("Using synthetic data for global dashboard...")
+from generate_data import generate_synthetic_data
+all_transactions_df = generate_synthetic_data(num_samples=10000, fraud_rate=0.0179)
+print("DEBUG: Using synthetic data as global fallback.")
 
 # --- Flask Routes ---
 @app.route('/')
@@ -445,7 +461,7 @@ def get_dashboard_data_route():
     try:
         processor = DataProcessor(all_transactions_df.copy())
         dashboard_data = processor.get_dashboard_data()
-        dashboard_data['organization_context'] = 'Global (Synthetic)' # Explicitly set context for global view
+        dashboard_data['organization_context'] = 'Global (Synthetic)'
         return jsonify(dashboard_data)
     except (KeyError, ValueError) as e:
         print(f"Key/Value Error in get_dashboard_data_route: {e}")
@@ -458,40 +474,38 @@ def get_dashboard_data_route():
         traceback.print_exc()
         return jsonify({"error": "An internal server error occurred."}), 500
 
+@app.route('/api/organizations', methods=['GET'])
+def get_available_organizations():
+    """Return list of all available HCB organizations"""
+    org_list = []
+    for slug, org_id in available_orgs.items():
+        org_list.append({
+            'slug': slug,
+            'id': org_id,
+            'name': slug.replace('-', ' ').title()
+        })
+    return jsonify({
+        'organizations': org_list,
+        'total': len(org_list)
+    })
 
 @app.route('/api/dashboard/<organization_name>', methods=['GET'])
 def get_organization_dashboard_data(organization_name):
     print(f"Received request for organization: {organization_name}")
-
-    # Map common organization names to pseudo-IDs for synthetic data filtering
-    # These IDs should correspond to some of the organization.id values generated in synthetic data
-    org_id_map = {
-        'hq': None, # 'hq' is handled by the global view
-        'hack-club': 5, # Example pseudo-ID
-        'scrapbook': 1, # Example pseudo-ID
-        'example-org-a': 10, # Another example
-        'example-org-b': 20, # Another example
-        # Add more organizations and their desired pseudo-IDs here for synthetic data
-    }
     
-    target_org_id = org_id_map.get(organization_name.lower())
-
+    # Check if organization exists in our available orgs
+    target_org_id = available_orgs.get(organization_name.lower())
+    
     if target_org_id is not None:
-        if organization_name.lower() == 'hq':
-            # This case is technically handled by the /api/dashboard/hq route, but included for completeness
-            filtered_data = all_transactions_df.copy() 
-            context_name = 'Global (Synthetic)'
-        else:
-            print(f"INFO: Simulating data for organization '{organization_name}' (Pseudo-ID: {target_org_id}) from synthetic dataset.")
-            # Filter the global synthetic data by the pseudo-organization ID
-            filtered_data = all_transactions_df[all_transactions_df['organization.id'] == target_org_id].copy()
-            context_name = organization_name.capitalize() # Display name for the dashboard
-
+        print(f"INFO: Fetching real-time data for organization '{organization_name}' (ID: {target_org_id})...")
+        # Fetch real data from HCB API
+        filtered_data = fetch_hcb_transactions(organization_id=target_org_id, limit=5000)
+        
         if not filtered_data.empty:
             try:
                 processor = DataProcessor(filtered_data)
                 dashboard_data = processor.get_dashboard_data()
-                dashboard_data['organization_context'] = context_name # Set the context for the frontend
+                dashboard_data['organization_context'] = organization_name
                 return jsonify(dashboard_data)
             except (KeyError, ValueError) as e:
                 print(f"Key/Value Error for org dashboard: {e}")
@@ -504,10 +518,27 @@ def get_organization_dashboard_data(organization_name):
                 traceback.print_exc()
                 return jsonify({"error": "An internal server error occurred for organization dashboard."}), 500
         else:
-            # If no data found for the pseudo-ID, or if filtered_data is empty
-            return jsonify({"message": f"No synthetic data found for organization: {organization_name} (Pseudo-ID: {target_org_id}). Please try 'scrapbook', 'hack-club', or other example IDs."}), 404
+            # If no real data, fall back to synthetic data filtered by a pseudo org ID
+            print(f"INFO: No real data found for '{organization_name}'. Using synthetic data fallback.")
+            synthetic_data = generate_synthetic_data(num_samples=5000, fraud_rate=0.0179)
+            # Filter synthetic data to simulate organization-specific data
+            org_filtered_data = synthetic_data[synthetic_data['organization.id'] == (target_org_id % 100)].copy()
+            if org_filtered_data.empty:
+                org_filtered_data = synthetic_data.head(100).copy()  # Fallback to some data
+            
+            try:
+                processor = DataProcessor(org_filtered_data)
+                dashboard_data = processor.get_dashboard_data()
+                dashboard_data['organization_context'] = f"{organization_name} (Synthetic)"
+                return jsonify(dashboard_data)
+            except Exception as e:
+                print(f"Error processing synthetic data for {organization_name}: {e}")
+                return jsonify({"error": f"Failed to process data for {organization_name}"}), 500
     else:
-        return jsonify({"message": f"Organization '{organization_name}' not found or not supported yet. Try 'scrapbook' or 'hack-club'."}), 404
+        return jsonify({
+            "message": f"Organization '{organization_name}' not found.", 
+            "available_organizations": list(available_orgs.keys())
+        }), 404
 
 
 if __name__ == '__main__':
